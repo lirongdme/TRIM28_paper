@@ -1,0 +1,433 @@
+library('devtools')
+library('Seurat')
+library('dplyr')
+library('ggplot2')
+library('magrittr')
+library('limma')
+library('data.table')
+library('monocle3')
+library('SeuratWrappers')
+library('Matrix')
+library('DropletUtils')
+
+
+#flox and dd combine: calling the data from filter matrix files
+DD.data = Read10X (data.dir = "~/TRIM28sc/DD/filtered_feature_bc_matrix")
+Flox.data = Read10X (data.dir = "~/TRIM28sc/Flox/filtered_feature_bc_matrix")
+DD <- CreateSeuratObject(counts = DD.data, project = "DD", min.cells = 3, min.features = 200)
+Flox <- CreateSeuratObject(counts = Flox.data, project = "Flox", min.cells = 3, min.features = 200)
+TRIM28.combined <- merge (Flox, y= DD, add.cell.ids= c("Flox","DD"), project = "TRIM28.combined")
+FeatureScatter(TRIM28.combined, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = 'orig.ident')
+
+###barcode inflection graph before cutoffs######
+
+TRIM28.combined <- CalculateBarcodeInflections(TRIM28.combined, group.column = 'orig.ident')
+BarcodeInflectionsPlot(TRIM28.combined)
+
+#####percent.mt graphs#####
+TRIM28.combined [["percent.mt"]]<-PercentageFeatureSet(TRIM28.combined, pattern ="^mt-")
+VlnPlot(TRIM28.combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = 'orig.ident', pt.size = 0.1)
+  
+#### cutoffs#### 
+
+TRIM28.combined <- subset(TRIM28.combined, subset = nFeature_RNA > 200 & nFeature_RNA < 7500 & percent.mt < 25) #%mt changes to 25% and nCount <90k on 07142020
+
+####log normalization##### 
+
+TRIM28.combined <- NormalizeData(TRIM28.combined, normalization.method = "LogNormalize", scale.factor = 10000) ## look up SCtransform for this normalization
+TRIM28.combined <- FindVariableFeatures(TRIM28.combined, selection.method = "vst", nfeatures = 2000)
+
+#### Scaling and Identify the 10 most highly variable genes####
+all.genes <- rownames(TRIM28.combined)
+TRIM28.combined <- ScaleData(TRIM28.combined, features = all.genes) ## mainly used for cluster and visualizations
+
+##### Find dimensionality#####
+
+TRIM28.combined <- RunPCA(TRIM28.combined, features = VariableFeatures(object = TRIM28.combined)) 
+ElbowPlot(TRIM28.combined, ndims = 50)
+
+#### Clustering, scaling and UMAP####
+
+TRIM28.combined <-FindNeighbors(TRIM28.combined, dims = 1:20) #changed to 20 on 09102020
+TRIM28.combined <-FindClusters(TRIM28.combined, resolution = 0.5) #changed to 0.2 on 113020
+TRIM28.combined <- RunUMAP(TRIM28.combined, dims = 1:20)  
+DimPlot(TRIM28.combined, reduction = "umap", pt.size =.5, label=T, label.size = 3, split.by = 'orig.ident') 
+DimPlot(TRIM28.combined, reduction = "umap", pt.size =.5, split.by = 'orig.ident')
+DimPlot(TRIM28.combined, reduction = "umap", pt.size =.5, label=T, label.size = 3) 
+DimPlot(TRIM28.combined, reduction = "umap", pt.size =.5) 
+FeaturePlot(TRIM28.combined, features = c("Amhr2", "Krt18"), split.by = 'orig.ident')
+FeaturePlot(TRIM28.combined, features = "Vdr", split.by = 'orig.ident')  
+FeaturePlot(TRIM28.combined, features = "Vdr", min.cutoff = 0, max.cutoff = 3, split.by = 'orig.ident')
+FeaturePlot(TRIM28.combined, features = c("Trim28", "Mki67", "Spink1", "Vim", "Col6a3"), split.by = 'orig.ident')
+FeaturePlot(TRIM28.combined, features = c("Krt8", "Krt19", "Acta2"), split.by = 'orig.ident') 
+FeaturePlot(TRIM28.combined, features = "Lgr5", split.by = 'orig.ident')   
+FeaturePlot(TRIM28.combined, features = "Pecam1", split.by = 'orig.ident')
+FeaturePlot(TRIM28.combined, features = "Acta2", split.by = 'orig.ident')   
+FeaturePlot(TRIM28.combined, features = "Esr1", split.by = 'orig.ident')  
+FeaturePlot(TRIM28.combined, features = "Trim28", split.by = 'orig.ident') 
+FeaturePlot(TRIM28.combined, features = "Snai1", split.by = 'orig.ident')   
+FeaturePlot(TRIM28.combined, features = c("Pdgfra", "Pdgfrb", "Acta2", "Vim"), split.by = 'orig.ident')
+FeaturePlot(TRIM28.combined, features = "Vdr", split.by = 'orig.ident')    
+FeaturePlot(TRIM28.combined, features = c("Fn1", "Cdh2"), split.by = 'orig.ident')
+FeaturePlot(TRIM28.combined, features = c("cd140", "Cd45"), split.by = 'orig.ident')
+FeaturePlot(TRIM28.combined, features = c("Mustn1", "Pln")) 
+VlnPlot(TRIM28.combined, features = c("Pln", "Aspn"), split.by = 'orig.ident') 
+
+TRIM28.markers <- FindAllMarkers(TRIM28.combined, only.pos = TRUE, min.pct = 0, logfc.threshold = 0, return.thresh = 1.01)
+write.csv(TRIM28.markers, file = '~/TRIM28sc/combine/TRIM28.markers-23.csv')
+
+# calculate how many cells in each cluster
+table(TRIM28.combined$seurat_clusters, TRIM28.combined$orig.ident)
+
+# Extract Pgr, Esr, Trim28, and cluster from each individual cells
+Pgrexprs <- data.frame(FetchData(object = TRIM28.combined, vars = c("Pgr", "Esr1", "Trim28", "seurat_clusters", "orig.ident")))
+write.csv(Pgrexprs, file = '~/TRIM28sc/combine/PgrTrimEsr-23.csv')
+
+#Generate new group of geno.cluster
+TRIM28.combined$genotype <- substr(TRIM28.combined$orig.ident, 1,1)
+TRIM28.combined$geno.cluster <- interaction(TRIM28.combined$genotype, TRIM28.combined$seurat_clusters)
+Idents(TRIM28.combined) <- 'geno.cluster'
+
+VlnPlot(TRIM28.combined, features = "Ihh") 
+
+#####DEGs between glands
+EndoD4_F4.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.4", ident.2 = "F.4")
+write.csv(EndoD4_F4.de.markers, file = '~/TRIM28sc/combine/EndoD4_F4.de.markers.csv')
+
+glandD11_F3.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.11", ident.2 = "F.3")
+write.csv(glandD11_F3.de.markers, file = '~/TRIM28sc/combine/glandD11_F3.de.markers.csv')
+
+glandD17_F17.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.17", ident.2 = "F.17")
+write.csv(glandD17_F17.de.markers, file = '~/TRIM28sc/combine/glandD17_F17.de.markers.csv')
+
+glandD17_F3.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.17", ident.2 = "F.3")
+write.csv(glandD17_F3.de.markers, file = '~/TRIM28sc/combine/glandD17_F3.de.markers.csv')
+
+glandD11_D17.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.11", ident.2 = "D.17")
+write.csv(glandD11_D17.de.markers, file = '~/TRIM28sc/combine/glandD11_D17.de.markers.csv')
+
+glandF3_F17.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.3", ident.2 = "F.17")
+write.csv(glandF3_F17.de.markers, file = '~/TRIM28sc/combine/glandF3_F17.de.markers.csv')
+
+EpiD17_F19.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.17", ident.2 = "F.19")
+write.csv(EpiD17_F19.de.markers, file = '~/TRIM28sc/combine/EpiD17_F19.de.markers.csv')
+
+EpiD11_F19.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.11", ident.2 = "F.19")
+write.csv(EpiD11_F19.de.markers, file = '~/TRIM28sc/combine/EpiD11_F19.de.markers.csv')
+
+EpiF17_F19.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.17", ident.2 = "F.19")
+write.csv(EpiF17_F19.de.markers, file = '~/TRIM28sc/combine/EpiF17_F19.de.markers.csv')
+
+EpiF3_F19.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.3", ident.2 = "F.19")
+write.csv(EpiF3_F19.de.markers, file = '~/TRIM28sc/combine/EpiF3_F19.de.markers.csv')
+
+EpiF17_F3.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.17", ident.2 = "F.3")
+write.csv(EpiF17_F3.de.markers, file = '~/TRIM28sc/combine/EpiF17_F3.de.markers.csv')
+
+#####DEGs between pericytes
+periD6_F12.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.6", ident.2 = "F.12")
+write.csv(periD6_F12.de.markers, file = '~/TRIM28sc/combine/periD6_F12.de.markers.csv')
+
+periD12_F12.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.12", ident.2 = "F.12")
+write.csv(periD12_F12.de.markers, file = '~/TRIM28sc/combine/periD12_F12.de.markers.csv')
+
+periD18_F12.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.18", ident.2 = "F.12")
+write.csv(periD18_F12.de.markers, file = '~/TRIM28sc/combine/periD18_F12.de.markers.csv')
+
+#####DEGs between stroma
+fibrF1_F0.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.1", ident.2 = "F.0")
+write.csv(fibrF1_F0.de.markers, file = '~/TRIM28sc/combine/fibrF1_F0.de.markers.csv')
+
+fibrF8_F1.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.8", ident.2 = "F.1")
+write.csv(fibrF8_F1.de.markers, file = '~/TRIM28sc/combine/fibrF8_F1.de.markers.csv')
+
+fibrF13_F1.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.13", ident.2 = "F.1")
+write.csv(fibrF13_F1.de.markers, file = '~/TRIM28sc/combine/fibrF13_F1.de.markers.csv')
+
+fibrF14_F1.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.14", ident.2 = "F.1")
+write.csv(fibrF14_F1.de.markers, file = '~/TRIM28sc/combine/fibrF14_F1.de.markers.csv')
+
+fibrD2_F0.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.2", ident.2 = "F.0")
+write.csv(fibrD2_F0.de.markers, file = '~/TRIM28sc/combine/fibrD2_F0.de.markers.csv')
+
+fibrD2_F1.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.2", ident.2 = "F.1")
+write.csv(fibrD2_F1.de.markers, file = '~/TRIM28sc/combine/fibrD2_F1.de.markers.csv')
+
+fibrD13_F0.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.13", ident.2 = "F.0")
+write.csv(fibrD13_F0.de.markers, file = '~/TRIM28sc/combine/fibrD13_F0.de.markers.csv')
+
+fibrD13_F13.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.13", ident.2 = "F.13")
+write.csv(fibrD13_F13.de.markers, file = '~/TRIM28sc/combine/fibrD13_F13.de.markers.csv')
+
+fibrF8_F0.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.8", ident.2 = "F.0")
+write.csv(fibrF8_F0.de.markers, file = '~/TRIM28sc/combine/fibrF8_F0.de.markers.csv')
+
+fibrF14_F0.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "F.14", ident.2 = "F.0")
+write.csv(fibrF14_F0.de.markers, file = '~/TRIM28sc/combine/fibrF14_F0.de.markers.csv')
+
+#####DEGs between psuedo time
+PseuD13_D6.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.13", ident.2 = "D.6")
+write.csv(PseuD13_D6.de.markers, file = '~/TRIM28sc/combine/PseuD13_D6.de.markers.csv')
+
+PseuD2_D6.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.2", ident.2 = "D.6")
+write.csv(PseuD2_D6.de.markers, file = '~/TRIM28sc/combine/PseuD2_D6.de.markers.csv')
+
+PseuD2_D13.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.2", ident.2 = "D.13")
+write.csv(PseuD2_D13.de.markers, file = '~/TRIM28sc/combine/PseuD2_D13.de.markers.csv')
+
+fiPeD18_F1.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.18", ident.2 = "F.1")
+write.csv(fiPeD18_F1.de.markers, file = '~/TRIM28sc/combine/fiPeD18_F1.de.markers.csv')
+
+fiPeD18_D2.de.markers <- FindMarkers(TRIM28.combined, ident.1 = "D.18", ident.2 = "D.2")
+write.csv(fiPeD18_D2.de.markers, file = '~/TRIM28sc/combine/fiPeD18_D2.de.markers.csv')
+
+
+##############subset monocytes and fibroblasts
+FeaturePlot(TRIM28.combined, features = c("Pdgfrb", "Hand2", "Amhr2", "Vim", "Acta2", "Pdgfra")) 
+FeaturePlot(TRIM28.combined, features = c("Krt8", "Krt18", "Krt19", "S100g", "Spink1", "Foxa2")) 
+FMese.raw.data <- as.matrix(GetAssayData(TRIM28.combined, slot = "counts")[, WhichCells(TRIM28.combined, ident = c("F.0", "F.1", "F.2", "F.6", "F.12", "F.18", "F.8", "F.13", "F.14", "F.9", "F.10"))])
+DMese.raw.data <- as.matrix(GetAssayData(TRIM28.combined, slot = "counts")[, WhichCells(TRIM28.combined, ident = c("D.0", "D.1", "D.2", "D.6", "D.12", "D.18", "D.8", "D.13", "D.14", "D.9", "D.10"))])
+FMese <- CreateSeuratObject(counts = FMese.raw.data, project = "FMese", min.cells = 3, min.features = 200)
+DMese <- CreateSeuratObject(counts = DMese.raw.data, project = "DMese", min.cells = 3, min.features = 200)
+
+######Or open new data
+FMese <- subset(TRIM28.combined, ident = c("F.0", "F.1", "F.2", "F.6", "F.12", "F.18", "F.8", "F.13", "F.14", "F.9", "F.10"))
+DMese <- subset(TRIM28.combined, ident = c("D.0", "D.1", "D.2", "D.6", "D.12", "D.18", "D.8", "D.13", "D.9", "D.10"))
+write10xCounts(x = FMese@assays$RNA@counts, path = "~/TRIM28sc/Mesenchyme/Flox")
+write10xCounts(x = DMese@assays$RNA@counts, path = "~/TRIM28sc/Mesenchyme/DD")
+
+FMese.data = Read10X (data.dir = "~/TRIM28sc/Mesenchyme/Flox")
+DMese.data = Read10X (data.dir = "~/TRIM28sc/Mesenchyme/DD")
+FMese <- CreateSeuratObject(counts = FMese.data, project = "FMese", min.cells = 3, min.features = 200)
+DMese <- CreateSeuratObject(counts = DMese.data, project = "DMese", min.cells = 3, min.features = 200)
+TRMese.combined <- merge (FMese, y= DMese, add.cell.ids= c("FMese","DMese"), project = "TRMese.combined")
+TRMese.combined <- CalculateBarcodeInflections(TRMese.combined, group.column = 'orig.ident')
+BarcodeInflectionsPlot(TRMese.combined)
+TRMese.combined [["percent.mt"]]<-PercentageFeatureSet(TRMese.combined, pattern ="^mt-")
+VlnPlot(TRMese.combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = 'orig.ident', pt.size = 0.1)
+TRMese.combined <- subset(TRMese.combined, subset = nFeature_RNA > 200 & nFeature_RNA < 7500 & percent.mt < 25) 
+TRMese.combined <- NormalizeData(TRMese.combined, normalization.method = "LogNormalize", scale.factor = 10000)
+TRMese.combined <- FindVariableFeatures(TRMese.combined, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(TRMese.combined)
+TRMese.combined <- ScaleData(TRMese.combined, features = all.genes)
+TRMese.combined <- RunPCA(TRMese.combined, features = VariableFeatures(object = TRMese.combined)) 
+ElbowPlot(TRMese.combined, ndims = 50)
+
+
+TRMese.combined <-FindNeighbors(TRMese.combined, dims = 1:21) 
+TRMese.combined <-FindClusters(TRMese.combined, resolution = 0.5) 
+TRMese.combined <- RunUMAP(TRMese.combined, dims = 1:21)  
+
+DimPlot(TRMese.combined, reduction = "umap", pt.size =.5, label=T, label.size = 3, split.by = 'orig.ident') 
+DimPlot(TRMese.combined, reduction = "umap", pt.size =.5, split.by = 'orig.ident')
+
+#Generate new group of geno.cluster
+TRMese.combined$genotype <- substr(TRMese.combined$orig.ident, 1,1)
+TRMese.combined$geno.cluster <- interaction(TRMese.combined$genotype, TRMese.combined$seurat_clusters)
+Idents(TRMese.combined) <- 'geno.cluster'
+
+TRMese.markers <- FindAllMarkers(TRMese.combined, only.pos = TRUE, min.pct = 0, logfc.threshold = 0, return.thresh = 1.01)
+write.csv(TRMese.markers, file = '~/TRIM28sc/Mesenchyme/TRIM28.markers-23.csv')
+
+table(TRMese.combined$seurat_clusters, TRMese.combined$orig.ident)
+
+TRMese.combined$genotype <- substr(TRMese.combined$orig.ident, 1,1)
+TRMese.combined$geno.cluster <- interaction(TRMese.combined$genotype, TRMese.combined$seurat_clusters)
+Idents(TRMese.combined) <- 'geno.cluster'
+
+TRMese.combined.cds <- as.cell_data_set(TRMese.combined)
+TRMese.combined.cds <- cluster_cells(cds = TRMese.combined.cds, reduction_method = "UMAP")
+TRMese.combined.cds <- learn_graph(TRMese.combined.cds, use_partition = TRUE)
+
+plot_cells(
+  cds = TRMese.combined.cds,      
+  color_cells_by = "geno.cluster",
+  label_groups_by_cluster=FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+  
+plot_cells(
+  cds = TRMese.combined.cds,      
+  color_cells_by = "geno.cluster",
+  label_cell_groups=FALSE,
+  trajectory_graph_segment_size = 1.25,
+  label_groups_by_cluster=FALSE,
+  label_roots = FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+ 
+ 
+ddMese <- subset(TRMese.combined, subset = orig.ident == "DD")
+ddMese.cds <- as.cell_data_set(ddMese)
+ddMese.cds <- cluster_cells(cds = ddMese.cds, reduction_method = "UMAP")
+ddMese.cds <- learn_graph(ddMese.cds, use_partition = TRUE)
+
+plot_cells(
+  cds = ddMese.cds,      
+  color_cells_by = "geno.cluster",
+  label_groups_by_cluster=FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+  
+plot_cells(
+  cds = ddMese.cds,      
+  color_cells_by = "geno.cluster",
+  label_cell_groups=FALSE,
+  trajectory_graph_segment_size = 1.25,
+  label_groups_by_cluster=FALSE,
+  label_roots = FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+
+
+
+##############subset Epithelium
+FEpi <- subset(TRIM28.combined, ident = c("F.3", "F.17", "F.19"))
+DEpi <- subset(TRIM28.combined, ident = c("D.11", "D.17"))
+write10xCounts(x = FEpi$RNA@counts, path = "~/TRIM28sc/Epithelium/Flox")
+write10xCounts(x = DEpi@assays$RNA@counts, path = "~/TRIM28sc/Epithelium/DD")
+
+FEpi.data = Read10X (data.dir = "~/TRIM28sc/Epithelium/Flox")
+DEpi.data = Read10X (data.dir = "~/TRIM28sc/Epithelium/DD")
+FEpi <- CreateSeuratObject(counts = FEpi.data, project = "FEpi", min.cells = 3, min.features = 200)
+DEpi <- CreateSeuratObject(counts = DEpi.data, project = "DEpi", min.cells = 3, min.features = 200)
+TREpi.combined <- merge(FEpi, y= DEpi, add.cell.ids= c("FEpi","DEpi"), project = "TREpi.combined")
+TREpi.combined <- CalculateBarcodeInflections(TREpi.combined, group.column = 'orig.ident')
+BarcodeInflectionsPlot(TREpi.combined)
+TREpi.combined [["percent.mt"]]<-PercentageFeatureSet(TREpi.combined, pattern ="^mt-")
+VlnPlot(TREpi.combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = 'orig.ident', pt.size = 0.1)
+TREpi.combined <- subset(TREpi.combined, subset = nFeature_RNA > 200 & nFeature_RNA < 7500 & percent.mt < 25) 
+TREpi.combined <- NormalizeData(TREpi.combined, normalization.method = "LogNormalize", scale.factor = 10000)
+TREpi.combined <- FindVariableFeatures(TREpi.combined, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(TREpi.combined)
+TREpi.combined <- ScaleData(TREpi.combined, features = all.genes)
+TREpi.combined <- RunPCA(TREpi.combined, features = VariableFeatures(object = TREpi.combined)) 
+ElbowPlot(TREpi.combined, ndims = 50)
+
+TREpi.combined <-FindNeighbors(TREpi.combined, dims = 1:11) 
+TREpi.combined <-FindClusters(TREpi.combined, resolution = 0.5) 
+TREpi.combined <- RunUMAP(TREpi.combined, dims = 1:11) 
+
+DimPlot(TREpi.combined, reduction = "umap", pt.size =.5, label=T, label.size = 3, split.by = 'orig.ident') 
+DimPlot(TREpi.combined, reduction = "umap", pt.size =.5, split.by = 'orig.ident')
+DimPlot(TREpi.combined, reduction = "umap", pt.size =.5, label=T, label.size = 3) 
+DimPlot(TREpi.combined, reduction = "umap", pt.size =.5) 
+
+FeaturePlot(TREpi.combined, features = c("Krt8", "Spink1", "Foxa2", "Sox9"), split.by = 'orig.ident') 
+FeaturePlot(TREpi.combined, features = c("Foxa2", "Sox9"), split.by = 'orig.ident') 
+FeaturePlot(TREpi.combined, features = c("Wnt7a", "Lifr"), split.by = 'orig.ident') 
+FeaturePlot(TREpi.combined, features = c("Prss28", "Prss29"), split.by = 'orig.ident')
+FeaturePlot(TREpi.combined, features = c("Krt8", "Vim"), split.by = 'orig.ident')
+FeaturePlot(TREpi.combined, features = c("Lgr5", "Spink3"), split.by = 'orig.ident')
+
+TREpi.markers <- FindAllMarkers(TREpi.combined, only.pos = TRUE, min.pct = 0, logfc.threshold = 0, return.thresh = 1.01)
+write.csv(TREpi.markers, file = '~/TRIM28sc/Epithelium/TRIM28.markers-9.csv')
+
+table(TREpi.combined$seurat_clusters, TREpi.combined$orig.ident)
+
+TREpi.combined$genotype <- substr(TREpi.combined$orig.ident, 1,1)
+TREpi.combined$geno.cluster <- interaction(TREpi.combined$genotype, TREpi.combined$seurat_clusters)
+Idents(TREpi.combined) <- 'geno.cluster'
+
+TREpi.combined.cds <- as.cell_data_set(TREpi.combined)
+TREpi.combined.cds <- cluster_cells(cds = TREpi.combined.cds, reduction_method = "UMAP")
+TREpi.combined.cds <- learn_graph(TREpi.combined.cds, use_partition = TRUE)
+
+plot_cells(
+  cds = TREpi.combined.cds,      
+  color_cells_by = "geno.cluster",
+  label_groups_by_cluster=FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+  
+plot_cells(
+  cds = TREpi.combined.cds,      
+  color_cells_by = "geno.cluster",
+  label_cell_groups=FALSE,
+  trajectory_graph_segment_size = 1.25,
+  label_groups_by_cluster=FALSE,
+  label_roots = FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+  
+ddEpi <- subset(TREpi.combined, subset = orig.ident == "DD")
+ddEpi.cds <- as.cell_data_set(ddEpi)
+ddEpi.cds <- cluster_cells(cds = ddEpi.cds, reduction_method = "UMAP")
+ddEpi.cds <- learn_graph(ddEpi.cds, use_partition = TRUE)
+
+plot_cells(
+  cds = ddEpi.cds,      
+  color_cells_by = "geno.cluster",
+  label_groups_by_cluster=FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+  
+plot_cells(
+  cds = ddEpi.cds,      
+  color_cells_by = "geno.cluster",
+  label_cell_groups=FALSE,
+  trajectory_graph_segment_size = 1.25,
+  label_groups_by_cluster=FALSE,
+  label_roots = FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+
+ffEpi <- subset(TREpi.combined, subset = orig.ident == "Flox")
+ffEpi.cds <- as.cell_data_set(ffEpi)
+ffEpi.cds <- cluster_cells(cds = ffEpi.cds, reduction_method = "UMAP")
+ffEpi.cds <- learn_graph(ffEpi.cds, use_partition = TRUE)
+
+plot_cells(
+  cds = ffEpi.cds,      
+  color_cells_by = "geno.cluster",
+  label_groups_by_cluster=FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+  
+plot_cells(
+  cds = ffEpi.cds,      
+  color_cells_by = "geno.cluster",
+  label_cell_groups=FALSE,
+  trajectory_graph_segment_size = 1.25,
+  label_groups_by_cluster=FALSE,
+  label_roots = FALSE,
+  label_leaves=FALSE,
+  label_branch_points=FALSE)
+
+
+########RNA velocity
+########Flox and dd TRIM28.combined
+Dcluster <- subset(TRIM28.combined, subset = orig.ident == "DD")
+Fcluster <- subset(TRIM28.combined, subset = orig.ident == "Flox")
+write10xCounts(x = Dcluster@assays$RNA@counts, path = "~/TRIM28sc/combine/filtered/DD")
+write10xCounts(x = Fcluster@assays$RNA@counts, path = "~/TRIM28sc/combine/filtered/Flox")
+write.csv(Cells(Dcluster), file = "~/TRIM28sc/combine/RNAvelo/D_cellID_obs.csv", row.names = FALSE)
+write.csv(Embeddings(Dcluster, reduction = "umap"), file = "~/TRIM28sc/combine/RNAvelo/D_cell_embeddings.csv")
+write.csv(Dcluster@meta.data$seurat_clusters, file = "~/TRIM28sc/combine/RNAvelo/D_clusters.csv")
+
+write.csv(Cells(Fcluster), file = "~/TRIM28sc/combine/RNAvelo/F_cellID_obs.csv", row.names = FALSE)
+write.csv(Embeddings(Fcluster, reduction = "umap"), file = "~/TRIM28sc/combine/RNAvelo/F_cell_embeddings.csv")
+write.csv(Fcluster@meta.data$seurat_clusters, file = "~/TRIM28sc/combine/RNAvelo/F_clusters.csv")
+
+#######Flox and dd TRMese.combined
+DMese <- subset(TRMese.combined, subset = orig.ident == "DD")
+FMese <- subset(TRMese.combined, subset = orig.ident == "Flox")
+write.csv(Cells(DMese), file = "~/TRIM28sc/combine/RNAvelo/TRMese/DMese_cellID_obs.csv", row.names = FALSE)
+write.csv(Embeddings(DMese, reduction = "umap"), file = "~/TRIM28sc/combine/RNAvelo/TRMese/DMese_cell_embeddings.csv")
+write.csv(DMese@meta.data$seurat_clusters, file = "~/TRIM28sc/combine/RNAvelo/TRMese/DMese_clusters.csv")
+
+write.csv(Cells(FMese), file = "~/TRIM28sc/combine/RNAvelo/TRMese/FMese_cellID_obs.csv", row.names = FALSE)
+write.csv(Embeddings(FMese, reduction = "umap"), file = "~/TRIM28sc/combine/RNAvelo/TRMese/FMese_cell_embeddings.csv")
+write.csv(FMese@meta.data$seurat_clusters, file = "~/TRIM28sc/combine/RNAvelo/TRMese/FMese_clusters.csv")
+
+#########Flox and dd TREpi.combined
+DEpi <- subset(TREpi.combined, subset = orig.ident == "DD")
+FEpi <- subset(TREpi.combined, subset = orig.ident == "Flox")
+
+write.csv(Cells(DEpi), file = "~/TRIM28sc/combine/RNAvelo/Epi/DEpi_cellID_obs.csv", row.names = FALSE)
+write.csv(Embeddings(DEpi, reduction = "umap"), file = "~/TRIM28sc/combine/RNAvelo/Epi/DEpi_cell_embeddings.csv")
+write.csv(DEpi@meta.data$seurat_clusters, file = "~/TRIM28sc/combine/RNAvelo/Epi/DEpi_clusters.csv")
+
+write.csv(Cells(FEpi), file = "~/TRIM28sc/combine/RNAvelo/Epi/FEpi_cellID_obs.csv", row.names = FALSE)
+write.csv(Embeddings(FEpi, reduction = "umap"), file = "~/TRIM28sc/combine/RNAvelo/Epi/FEpi_cell_embeddings.csv")
+write.csv(FEpi@meta.data$seurat_clusters, file = "~/TRIM28sc/combine/RNAvelo/Epi/FEpi_clusters.csv")
